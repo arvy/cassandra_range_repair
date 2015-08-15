@@ -13,6 +13,13 @@ import subprocess
 import sys
 import multiprocessing
 import platform
+import smtplib
+import threading
+from email.mime.text import MIMEText
+
+
+#for keyboard interrupt handling
+import signal
 
 class Token_Container:
     RANGE_MIN = -(2**63)
@@ -99,10 +106,10 @@ class Token_Container:
                 logging.debug("Discarding node/token %s/%s", segments[0], segments[-1])
                 continue
             self.ring_tokens.append(long(segments[-1]))
-            logging.debug(str(self.ring_tokens))
+            #logging.debug(str(self.ring_tokens))
         self.ring_tokens.sort()
         logging.info("Found {0} tokens".format(len(self.ring_tokens)))
-        logging.debug(self.ring_tokens)
+        #logging.debug(self.ring_tokens)
         return
 
     def get_host_tokens(self):
@@ -220,11 +227,16 @@ def repair_range(options, start, end, step, nodeposition):
         cmd.extend([options.local])
     else:
         cmd.extend(["-pr"])
-        
-    cmd.extend([options.local, options.par, options.inc, options.snapshot,
+
+    cmd.extend([options.par, options.inc, options.snapshot,
                  "-st", start, "-et", end])
 
+
+    t = threading.Timer(3600.0, notify, [
+    'Cassandra repair stuck on %s' % options.host,
+    'keyspace: %s' % options.keyspace or 'all'])
     if not options.dry_run:
+        t.start()
         success, cmd, _, stderr = run_command(*cmd)
     else:
         print "{step:04d}/{nodeposition}".format(nodeposition=nodeposition, step=step), " ".join(cmd)
@@ -233,7 +245,10 @@ def repair_range(options, start, end, step, nodeposition):
     if not success:
         logging.error("FAILED: {nodeposition} step {step:04d} {cmd}".format(nodeposition=nodeposition, step=step, cmd=cmd))
         logging.error(stderr)
+        notify('Cassandra repair failed on %s' % options.host, 'keyspace: %s' % options.keyspace or 'all')
         return
+    else:
+        t.cancel()
     logging.debug("{nodeposition} step {step:04d} complete".format(nodeposition=nodeposition,step=step))
     return
 
@@ -307,7 +322,24 @@ def repair(options):
             r.get()
     return
 
+def notify(subject, msg=''):
+    logging.info("Notifying..")
+    # Create a text/plain message
+    msg = MIMEText(msg)
+
+    msg['Subject'] = subject
+    msg['From'] = 'do-not-reply@gogii.net'
+    msg['To'] = 'arvydas@gogii.net'
+
+    # Send the message via our own SMTP server, but don't include the
+    # envelope header.
+    s = smtplib.SMTP('smtp-internal.textplus.com')
+    s.sendmail('do-not-reply@gogii.net', msg["To"].split(","), msg.as_string())
+    s.quit()
+    return
+
 def main():
+
     """Validate arguments and initiate repair
     """
     parser = OptionParser()
